@@ -1,6 +1,6 @@
 cc := clang
-cflags := -std=c11 -Wall -Wextra -pedantic -MMD -MP
-incdir := -Ihttp
+cflags := -std=c11 -Wall -Wextra -pedantic -MMD -MP -D_GNU_SOURCE
+incdir := -Ihttp2 -Iutils
 objdir := build/obj
 testdir := build/tests
 
