@@ -8,28 +8,43 @@
 
 void readAndWrite(Conn *conn) {
     char buf[1024];
+
     while (1) {
-        ssize_t bytes_read = read(conn->fd, &buf, 1024 - 1);
-        if (bytes_read <= 0) {
+        ssize_t bytes_recv = recv(conn->fd, &buf, 1024, 0);
+        if (bytes_recv <= 0) {
             break;
         }
-        buf[bytes_read] = '\0';
-        write(conn->fd, buf, bytes_read);
+
+        int fd = sendall(conn->fd, buf, bytes_recv);
+        if (fd == -1) {
+            break;
+        }
     }
 }
 
 int main(void) {
+    char str[INET_ADDRSTRLEN];
+
     Listener *listener = tcpListen(8000);
     if (!listener) {
         return -1;
     }
+
+    fprintf(stdout,
+            "[Listening] %s:%d\n",
+            inet_ntop(AF_INET, &listener->addr.sin_addr, str, INET_ADDRSTRLEN),
+            ntohs(listener->addr.sin_port));
 
     while (1) {
         Conn *conn = tcpAccept(listener);
         if (!conn) {
             return -1;
         }
-        printf("Connected to ==> %s\n", inet_ntoa(conn->addr.sin_addr));
+
+        fprintf(stdout,
+                "[Connected] %s:%d\n",
+                inet_ntop(AF_INET, &conn->addr.sin_addr, str, INET_ADDRSTRLEN),
+                ntohs(conn->addr.sin_port));
 
         tcpHandler(conn, readAndWrite);
         tcpConnClose(conn);
