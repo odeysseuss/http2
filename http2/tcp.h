@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
-#include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/epoll.h>
@@ -162,7 +161,8 @@ Conn *tcpAccept(Listener *listener) {
     }
 
     conn->size = sizeof(struct sockaddr_in);
-    int conn_fd = accept(listener->fd, (struct sockaddr *)&conn->addr, &conn->size);
+    int conn_fd =
+        accept(listener->fd, (struct sockaddr *)&conn->addr, &conn->size);
 
     if (conn_fd == -1) {
         free_(conn);
@@ -201,7 +201,8 @@ int tcpHandler(Conn *conn, void (*handler)(Conn *conn)) {
 }
 
 int tcpPoll(Listener *listener) {
-    int nfds = epoll_wait(listener->epoll_fd, listener->events, MAX_EPOLL_EVENTS, -1);
+    int nfds =
+        epoll_wait(listener->epoll_fd, listener->events, MAX_EPOLL_EVENTS, -1);
     if (nfds == -1) {
         perror("epoll_wait");
         return -1;
@@ -248,7 +249,7 @@ ssize_t sendAll(int fd, const void *buf, size_t len) {
             return -1;
         }
         if (bytes_send == 0) {
-            break;  // Connection closed
+            break; // Connection closed
         }
         total += bytes_send;
         bytes_left -= bytes_send;

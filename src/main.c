@@ -4,7 +4,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <string.h>
 #include "tcp.h"
 
 void readAndWrite(Conn *conn) {
@@ -28,11 +27,12 @@ void readAndWrite(Conn *conn) {
         }
 
         if (bytes_recv == 0) {
-            fprintf(stdout,
-                    "[Disconnected] %s:%d (fd: %d)\n",
-                    inet_ntop(AF_INET, &conn->addr.sin_addr, str, INET_ADDRSTRLEN),
-                    ntohs(conn->addr.sin_port),
-                    conn->fd);
+            fprintf(
+                stdout,
+                "[Disconnected] %s:%d (fd: %d)\n",
+                inet_ntop(AF_INET, &conn->addr.sin_addr, str, INET_ADDRSTRLEN),
+                ntohs(conn->addr.sin_port),
+                conn->fd);
             goto clean;
         }
 
@@ -83,7 +83,10 @@ int main(void) {
 
                     fprintf(stdout,
                             "[Connected] %s:%d (fd: %d)\n",
-                            inet_ntop(AF_INET, &conn->addr.sin_addr, str, INET_ADDRSTRLEN),
+                            inet_ntop(AF_INET,
+                                      &conn->addr.sin_addr,
+                                      str,
+                                      INET_ADDRSTRLEN),
                             ntohs(conn->addr.sin_port),
                             conn->fd);
                 }
