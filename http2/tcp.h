@@ -80,15 +80,16 @@ Listener *tcpListen(int port) {
     int opt = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
         perror("setsockopt");
-        close(fd);
-        free_(listener);
-        return NULL;
+        goto clean;
+    }
+
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) == -1) {
+        perror("setsockopt");
+        goto clean;
     }
 
     if (setNonBlockingSocket_(fd) == -1) {
-        close(fd);
-        free_(listener);
-        return NULL;
+        goto clean;
     }
 
     listener->fd = fd;
@@ -99,24 +100,18 @@ Listener *tcpListen(int port) {
 
     if (bind(fd, (struct sockaddr *)&listener->addr, listener->size) == -1) {
         perror("bind");
-        close(fd);
-        free_(listener);
-        return NULL;
+        goto clean;
     }
 
     if (listen(fd, SOMAXCONN) == -1) {
         perror("listen");
-        close(fd);
-        free_(listener);
-        return NULL;
+        goto clean;
     }
 
     int epoll_fd = epoll_create1(0);
     if (epoll_fd == -1) {
         perror("epoll_create1");
-        close(fd);
-        free_(listener);
-        return NULL;
+        goto clean;
     }
 
     listener->epoll_fd = epoll_fd;
@@ -125,12 +120,15 @@ Listener *tcpListen(int port) {
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &listener->ev) == -1) {
         perror("epoll ctl listener");
         close(epoll_fd);
-        close(fd);
-        free_(listener);
-        return NULL;
+        goto clean;
     }
 
     return listener;
+
+clean:
+    close(fd);
+    free_(listener);
+    return NULL;
 }
 
 static int addtoEpollList_(Conn *conn, Listener *listener) {
@@ -138,10 +136,9 @@ static int addtoEpollList_(Conn *conn, Listener *listener) {
         return -1;
     }
 
-    struct epoll_event ev;
-    ev.data.ptr = conn;
-    ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
-    if (epoll_ctl(listener->epoll_fd, EPOLL_CTL_ADD, conn->fd, &ev) == -1) {
+    listener->ev.data.ptr = conn;
+    listener->ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
+    if (epoll_ctl(listener->epoll_fd, EPOLL_CTL_ADD, conn->fd, &listener->ev) == -1) {
         perror("epoll_ctl add client");
         return -1;
     }
