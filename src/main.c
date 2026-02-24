@@ -16,16 +16,14 @@ void readAndWrite(Conn *conn) {
     ssize_t bytes_recv;
 
     while (1) {
-        bytes_recv = recv(conn->fd, buf, sizeof(buf) - 1, 0);
+        bytes_recv = tcpRecv(conn->fd, buf, sizeof(buf) - 1);
 
         if (bytes_recv == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
-            }
-            perror("recv");
             goto clean;
         }
-
+        if (bytes_recv == 1) {
+            break;
+        }
         if (bytes_recv == 0) {
             fprintf(stdout,
                     "[Disconnected] %s:%d (fd: %d)\n",
@@ -36,7 +34,7 @@ void readAndWrite(Conn *conn) {
             goto clean;
         }
 
-        ssize_t bytes_send = tcpSendAll(conn->fd, buf, bytes_recv);
+        ssize_t bytes_send = tcpSend(conn->fd, buf, bytes_recv);
         if (bytes_send == -1) {
             perror("sendAll");
             goto clean;

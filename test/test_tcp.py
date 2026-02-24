@@ -19,7 +19,7 @@ async def requests(id, msg_count=5):
         print(f"Client {id} error: {e}")
 
 async def main():
-    tasks = [requests(i) for i in range (10000)]
+    tasks = [requests(i) for i in range (1024)]
     await asyncio.gather(*tasks)
 
 asyncio.run(main())
