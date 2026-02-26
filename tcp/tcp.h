@@ -7,12 +7,14 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/epoll.h>
 #include <wait.h>
 #include <signal.h>
+#include <netdb.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,18 +36,18 @@ typedef struct {
 
 typedef struct {
     int fd;
-    uint32_t addr;
-    uint16_t port;
+    socklen_t addr_len;
+    struct sockaddr_storage addr;
 } Listener;
 
 typedef struct {
     int fd;
     int epoll_fd;
-    uint32_t addr;
-    uint16_t port;
+    socklen_t addr_len;
+    struct sockaddr_storage addr;
 } Conn;
 
-Listener *tcpListen(int port);
+Listener *tcpListen(char *port);
 Event *tcpPoll(Listener *listener);
 Conn *tcpAccept(Listener *listener);
 int tcpHandler(Conn *conn, void (*handler)(Conn *conn));
@@ -55,16 +57,27 @@ void tcpCloseListener(Listener *listener);
 ssize_t tcpRecv(int fd, void *buf, size_t len);
 ssize_t tcpSend(int fd, const void *buf, size_t len);
 
+char *getIPAddr(struct sockaddr_storage *sa, char *buf, size_t len);
+uint16_t getPort(struct sockaddr_storage *sa);
+
 #ifdef TCP_IMPLEMENTATION
 
+static inline void *getInAddr_(struct sockaddr *sa) {
+    if (sa->sa_family == AF_INET) {
+        return &(((struct sockaddr_in *)sa)->sin_addr);
+    }
+
+    return &(((struct sockaddr_in6 *)sa)->sin6_addr);
+}
+
 static int setSockOpt_(int fd) {
-    int yes = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+    int opt = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
         perror("setsockopt");
         return -1;
     }
 
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(yes)) == -1) {
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) == -1) {
         perror("setsockopt");
         return -1;
     }
@@ -150,41 +163,62 @@ static int addtoEpollList_(Conn *conn, Listener *listener) {
     return 0;
 }
 
-Listener *tcpListen(int port) {
+Listener *tcpListen(char *port) {
     Listener *listener = (Listener *)malloc_(sizeof(Listener) + sizeof(Event));
     if (!listener) {
         perror("malloc");
         return NULL;
     }
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == -1) {
-        perror("socket");
-        free_(listener);
+    struct addrinfo hints, *res, *p;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    int rv = getaddrinfo(NULL, port, &hints, &res);
+    if (rv != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
         return NULL;
     }
 
-    if (setSockOpt_(fd) == -1) {
-        goto clean;
+    int fd = -1;
+    for (p = res; p != NULL; p = p->ai_next) {
+        fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (fd == -1) {
+            perror("socket");
+            continue;
+        }
+
+        if (setSockOpt_(fd) == -1) {
+            freeaddrinfo(res);
+            goto clean;
+        }
+
+        if (setNonBlockingSocket_(fd) == -1) {
+            freeaddrinfo(res);
+            goto clean;
+        }
+
+        if (bind(fd, p->ai_addr, p->ai_addrlen) == -1) {
+            perror("bind");
+            close(fd);
+            continue;
+        }
+
+        memcpy(&listener->addr, p->ai_addr, p->ai_addrlen);
+        listener->addr_len = p->ai_addrlen;
+
+        break;
     }
 
-    if (setNonBlockingSocket_(fd) == -1) {
+    freeaddrinfo(res);
+
+    if (!p) {
         goto clean;
     }
-
-    struct sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = INADDR_ANY;
 
     listener->fd = fd;
-    listener->port = addr.sin_port;
-    listener->addr = addr.sin_addr.s_addr;
-
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-        perror("bind");
-        goto clean;
-    }
 
     if (listen(fd, SOMAXCONN) == -1) {
         perror("listen");
@@ -231,7 +265,7 @@ Conn *tcpAccept(Listener *listener) {
         return NULL;
     }
 
-    struct sockaddr_in addr;
+    struct sockaddr_storage addr;
     socklen_t size = sizeof(addr);
     int conn_fd = accept(listener->fd, (struct sockaddr *)&addr, &size);
 
@@ -247,8 +281,8 @@ Conn *tcpAccept(Listener *listener) {
     Event *event = getEventPtr_(listener);
     conn->fd = conn_fd;
     conn->epoll_fd = event->epoll_fd;
-    conn->addr = addr.sin_addr.s_addr;
-    conn->port = addr.sin_port;
+    conn->addr = addr;
+    conn->addr_len = size;
 
     if (setNonBlockingSocket_(conn_fd) == -1) {
         goto clean;
@@ -345,6 +379,28 @@ ssize_t tcpSend(int fd, const void *buf, size_t len) {
     }
 
     return total;
+}
+
+char *getIPAddr(struct sockaddr_storage *sa, char *buf, size_t len) {
+    if (sa->ss_family == AF_INET) {
+        struct sockaddr_in *s = (struct sockaddr_in *)sa;
+        inet_ntop(AF_INET, &s->sin_addr, buf, len);
+    } else {
+        struct sockaddr_in6 *s = (struct sockaddr_in6 *)sa;
+        inet_ntop(AF_INET6, &s->sin6_addr, buf, len);
+    }
+
+    return buf;
+}
+
+uint16_t getPort(struct sockaddr_storage *sa) {
+    if (sa->ss_family == AF_INET) {
+        struct sockaddr_in *s = (struct sockaddr_in *)sa;
+        return ntohs(s->sin_port);
+    } else {
+        struct sockaddr_in6 *s = (struct sockaddr_in6 *)sa;
+        return ntohs(s->sin6_port);
+    }
 }
 
 #endif // TCP_IMPLEMENTATION

@@ -1,10 +1,7 @@
 #define TCP_IMPLEMENTATION
-#include <stdio.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
 #include "tcp.h"
+
+#define PORT "8000"
 
 void readAndWrite(Conn *conn) {
     if (!conn || conn->fd < 0) {
@@ -12,7 +9,7 @@ void readAndWrite(Conn *conn) {
     }
 
     char buf[1024];
-    char str[INET_ADDRSTRLEN];
+    char str[INET6_ADDRSTRLEN];
     ssize_t bytes_recv;
 
     while (1) {
@@ -27,8 +24,8 @@ void readAndWrite(Conn *conn) {
         if (bytes_recv == 0) {
             fprintf(stdout,
                     "[Disconnected] %s:%d (fd: %d)\n",
-                    inet_ntop(AF_INET, &conn->addr, str, INET_ADDRSTRLEN),
-                    ntohs(conn->port),
+                    getIPAddr(&conn->addr, str, INET6_ADDRSTRLEN),
+                    getPort(&conn->addr),
                     conn->fd);
 
             goto clean;
@@ -49,17 +46,17 @@ clean:
 }
 
 int main(void) {
-    char str[INET_ADDRSTRLEN];
+    char buf[INET6_ADDRSTRLEN];
 
-    Listener *listener = tcpListen(8000);
+    Listener *listener = tcpListen(PORT);
     if (!listener) {
         return -1;
     }
 
     fprintf(stdout,
             "[Listening] %s:%d\n",
-            inet_ntop(AF_INET, &listener->addr, str, INET_ADDRSTRLEN),
-            ntohs(listener->port));
+            getIPAddr(&listener->addr, buf, sizeof(buf)),
+            getPort(&listener->addr));
 
     while (1) {
         Event *event = tcpPoll(listener);
@@ -80,12 +77,11 @@ int main(void) {
                         break;
                     }
 
-                    fprintf(
-                        stdout,
-                        "[Connected] %s:%d (fd: %d)\n",
-                        inet_ntop(AF_INET, &conn->addr, str, INET_ADDRSTRLEN),
-                        ntohs(conn->port),
-                        conn->fd);
+                    fprintf(stdout,
+                            "[Connected] %s:%d (fd: %d)\n",
+                            getIPAddr(&listener->addr, buf, INET6_ADDRSTRLEN),
+                            getPort(&listener->addr),
+                            conn->fd);
                 }
             } else {
                 Conn *conn = event->events[i].data.ptr;
