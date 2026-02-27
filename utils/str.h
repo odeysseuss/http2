@@ -1,5 +1,10 @@
 /*
 * SDS style string library
+*
+* NOTE: To use this library define the following macro in exactly one file
+* before inlcuding str.h:
+*   #define STRING_IMPLEMENTATION
+*   #include "str.h"
 */
 
 #ifndef STR_H
@@ -92,7 +97,13 @@ void strFree(String s) {
     StrHdr_ *hdr = getStrHdr_(s);
     free(hdr);
 }
-#endif
+
+#endif // STRING_IMPLEMENTATION
+
+#undef malloc_
+#undef calloc_
+#undef realloc_
+#undef free_
 
 #ifdef __cplusplus
 }

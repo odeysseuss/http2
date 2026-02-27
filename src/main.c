@@ -14,14 +14,9 @@ void readAndWrite(Conn *conn) {
 
     while (1) {
         bytes_recv = tcpRecv(conn->fd, buf, sizeof(buf) - 1);
-
-        if (bytes_recv == -1) {
-            goto clean;
-        }
-        if (bytes_recv == 1) {
+        if (bytes_recv == -2) {
             break;
-        }
-        if (bytes_recv == 0) {
+        } else if (bytes_recv == 0) {
             fprintf(stdout,
                     "[Disconnected] %s:%d (fd: %d)\n",
                     getIPAddr(&conn->addr, str, INET6_ADDRSTRLEN),
@@ -29,11 +24,12 @@ void readAndWrite(Conn *conn) {
                     conn->fd);
 
             goto clean;
+        } else if (bytes_recv == -1) {
+            goto clean;
         }
 
         ssize_t bytes_send = tcpSend(conn->fd, buf, bytes_recv);
-        if (bytes_send == -1) {
-            perror("sendAll");
+        if (bytes_send <= 0) {
             goto clean;
         }
     }

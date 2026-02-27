@@ -1,3 +1,14 @@
+/*
+* TCP abstraction layer with linux sockets api
+* Uses non blocking sockets for concurrency with epoll api
+*
+* NOTE: To use this library define the following macro in exactly one file
+* before inlcuding tcp.h:
+*   #define TCP_IMPLEMENTATION
+*   #include "tcp.h"
+*
+* WARNING: Only accessible in Linux
+*/
 #ifndef TCP_H
 #define TCP_H
 
@@ -47,28 +58,53 @@ typedef struct {
     struct sockaddr_storage addr;
 } Conn;
 
+/// Initiates the server instance and adds the server socket for polling
+/// Returns:
+/// On success returns a Listener instance. On error returns NULL.
 Listener *tcpListen(char *port);
+/// Poll the sockets for IO multiplexing.
+/// Use the `nfds` field to loop through the available events and check for
+/// the specific event's `data.fd`, If fd is listener.fd then event occured in server.
+/// If it is the Listener run `tcpAccept` and if it is the client run `tcpHandler`;
+/// `tcpHandler` can get the Conn pointer from `data.ptr`.
+/// Returns:
+/// On success returns a Event instance. On error returns NULL.
 Event *tcpPoll(Listener *listener);
+/// Accepts a client connection and adds it for polling
+/// Returns:
+/// On success returns a Conn instance. On error returns NULL.
 Conn *tcpAccept(Listener *listener);
+/// Handler function for the clients. Runs for each of the client instance.
+/// Returns:
+/// On success returns a 0. On error returns -1.
 int tcpHandler(Conn *conn, void (*handler)(Conn *conn));
+/// Removes the client socket from epoll, closes the socket and frees Conn instance
+/// MUST be called inside the tcpHandler
 void tcpCloseConn(Conn *conn);
+/// Closes both epoll_fd and listener socket and frees Listener instance
 void tcpCloseListener(Listener *listener);
 
+/// Receive a message from the socket. Calls `recv` syscall
+/// Returns:
+/// On success returns the total bytes received
+/// On error returns -1
+/// If `fd` gets closed returns 0
+/// -2 if `recv` call returns `EAGAIN/EWOULDBLOCK`
 ssize_t tcpRecv(int fd, void *buf, size_t len);
+/// Send a message on socket. Calls `send` in a loop to ensure all the data has been send
+/// Returns:
+/// On success returns the total bytes send
+/// On error returns -1
+/// If `fd` gets closed returns 0
+/// -2 if `send` call returns `EAGAIN/EWOULDBLOCK`
 ssize_t tcpSend(int fd, const void *buf, size_t len);
 
+/// IP version agnostic `inet_ntop`
 char *getIPAddr(struct sockaddr_storage *sa, char *buf, size_t len);
+/// IP version agnostic `ntohs`
 uint16_t getPort(struct sockaddr_storage *sa);
 
 #ifdef TCP_IMPLEMENTATION
-
-static inline void *getInAddr_(struct sockaddr *sa) {
-    if (sa->sa_family == AF_INET) {
-        return &(((struct sockaddr_in *)sa)->sin_addr);
-    }
-
-    return &(((struct sockaddr_in6 *)sa)->sin6_addr);
-}
 
 static int setSockOpt_(int fd) {
     int opt = 1;
@@ -164,6 +200,9 @@ static int addtoEpollList_(Conn *conn, Listener *listener) {
 }
 
 Listener *tcpListen(char *port) {
+    // As the lifetime of Listener and Event are same we allocate both of them in a same region,
+    // later we access them using getEventPtr_ which returns the Event chunk by moving the listener
+    // pointer by sizeof Listener (listener + 1)
     Listener *listener = (Listener *)malloc_(sizeof(Listener) + sizeof(Event));
     if (!listener) {
         perror("malloc");
@@ -259,6 +298,9 @@ Conn *tcpAccept(Listener *listener) {
         return NULL;
     }
 
+    // FIX:
+    // Not so performant as every time a new client connects it allocates memory
+    // in the heap. So, if there are 100 clients it calls malloc a 100 times
     Conn *conn = (Conn *)malloc_(sizeof(Conn));
     if (!conn) {
         perror("malloc conn");
@@ -340,13 +382,11 @@ ssize_t tcpRecv(int fd, void *buf, size_t len) {
     ssize_t bytes_recv = recv(fd, buf, len, 0);
     if (bytes_recv == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return 1;
+            return -2;
         }
         perror("recv");
         return -1;
-    }
-
-    if (bytes_recv == 0) {
+    } else if (bytes_recv == 0) {
         return 0;
     }
 
@@ -366,14 +406,14 @@ ssize_t tcpSend(int fd, const void *buf, size_t len) {
         bytes_send = send(fd, (const char *)buf + total, bytes_left, 0);
         if (bytes_send == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
+                return -2;
             }
             perror("send");
             return -1;
+        } else if (bytes_send == 0) {
+            return 0;
         }
-        if (bytes_send == 0) {
-            break;
-        }
+
         total += bytes_send;
         bytes_left -= bytes_send;
     }
