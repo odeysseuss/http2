@@ -2,8 +2,8 @@
 * TCP abstraction layer with linux sockets api
 * Uses non blocking sockets for concurrency with epoll api
 *
-* NOTE: To use this library define the following macro in exactly one file
-* before inlcuding tcp.h:
+* NOTE: To use this library define the following macro in EXACTLY
+* ONE FILE BEFORE inlcuding tcp.h:
 *   #define TCP_IMPLEMENTATION
 *   #include "tcp.h"
 *
@@ -31,14 +31,23 @@
 extern "C" {
 #endif
 
-/// for custom allocators
+/// Used for custom general purpose allocators
+/// To use a custom allocators simply define them to the specific allocator's functions
+/// Warning: The function signatures has to be the same as stdlib's allocator
+/// Recommended Allocator: Microsoft's mimalloc
 #define malloc_ malloc
 #define calloc_ calloc
 #define realloc_ realloc
 #define free_ free
 
-#define MAX_EPOLL_EVENTS 1024
+/// Batch size of ready events processed at once by epoll. A higher value means that
+/// it will be more performant while consuming more memory.
+#define MAX_EPOLL_EVENTS 256
+/// The maximum length to which the queue of pending connections for server `Listener.fd`
+/// may grow.
+#define BACKLOG SOMAXCONN
 
+/// The lifetime of `Event` is managed by `Listener`
 typedef struct {
     struct epoll_event ev, events[MAX_EPOLL_EVENTS];
     int epoll_fd;
@@ -59,61 +68,79 @@ typedef struct {
 } Conn;
 
 /// Initiates the server instance and adds the server socket for polling
+/// Info:
+/// Allocates `Listener` and `Event` on the same heap region [Listener + Event]
+/// Free it with `tcpCloseListener`.
 /// Returns:
-/// On success returns a Listener instance. On error returns NULL.
+/// On success, returns a Listener instance. On error, returns NULL.
 Listener *tcpListen(char *port);
 /// Poll the sockets for IO multiplexing.
-/// Use the `nfds` field to loop through the available events and check for
-/// the specific event's `data.fd`, If fd is listener.fd then event occured in server.
-/// If it is the Listener run `tcpAccept` and if it is the client run `tcpHandler`;
+/// Info:
+/// After the function returns, use the `nfds` field to loop through the available events
+/// and check for the specific event's `data.fd`. If fd is `listener.fd` then event occured 
+/// in server. For server event, run `tcpAccept` and for each client run `tcpHandler`.
 /// `tcpHandler` can get the Conn pointer from `data.ptr`.
+/// Warning:
+/// The lifetime of `Event` is managed by `Listener` and thus is allocated and freed
+/// with `Listener`. DO NOT explicitly call free on `Event`
 /// Returns:
-/// On success returns a Event instance. On error returns NULL.
+/// On success, returns a Event instance. On error, returns NULL.
 Event *tcpPoll(Listener *listener);
 /// Accepts a client connection and adds it for polling
+/// Info:
+/// Free it with `tcpCloseConn`
 /// Returns:
-/// On success returns a Conn instance. On error returns NULL.
+/// On success, returns a Conn instance. On error, returns NULL.
 Conn *tcpAccept(Listener *listener);
-/// Handler function for the clients. Runs for each of the client instance.
+/// Handler function for each clients.
 /// Returns:
-/// On success returns a 0. On error returns -1.
+/// On success, returns a 0. On error, returns -1.
 int tcpHandler(Conn *conn, void (*handler)(Conn *conn));
 /// Removes the client socket from epoll, closes the socket and frees Conn instance
-/// MUST be called inside the tcpHandler
+/// Warning:
+/// SHOULD be called inside the tcpHandler
 void tcpCloseConn(Conn *conn);
 /// Closes both epoll_fd and listener socket and frees Listener instance
 void tcpCloseListener(Listener *listener);
 
 /// Receive a message from the socket. Calls `recv` syscall
 /// Returns:
-/// On success returns the total bytes received
-/// On error returns -1
-/// If `fd` gets closed returns 0
+/// On success, returns the total bytes received.
+/// On error, returns 0 if `fd` gets closed,
 /// -2 if `recv` call returns `EAGAIN/EWOULDBLOCK`
+/// and -1 for general error
 ssize_t tcpRecv(int fd, void *buf, size_t len);
 /// Send a message on socket. Calls `send` in a loop to ensure all the data has been send
 /// Returns:
-/// On success returns the total bytes send
-/// On error returns -1
-/// If `fd` gets closed returns 0
+/// On success, returns the total bytes send.
+/// On error, returns 0 if `fd` gets closed,
 /// -2 if `send` call returns `EAGAIN/EWOULDBLOCK`
+/// and -1 for general error
 ssize_t tcpSend(int fd, const void *buf, size_t len);
 
 /// IP version agnostic `inet_ntop`
+/// Warning:
+/// Make sure, len >= INET6_ADDRSTRLEN
+/// Returns:
+/// On success, writes the IP address to buf and return the value at buf. On error, returns NULL.
 char *getIPAddr(struct sockaddr_storage *sa, char *buf, size_t len);
 /// IP version agnostic `ntohs`
+/// Warning:
+/// The passed argument CAN NOT be NULL
+/// Returns:
+/// The port number
 uint16_t getPort(struct sockaddr_storage *sa);
 
 #ifdef TCP_IMPLEMENTATION
 
 static int setSockOpt_(int fd) {
-    int opt = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
+    int yes = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
         perror("setsockopt");
         return -1;
     }
 
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) == -1) {
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(yes)) == -1) {
         perror("setsockopt");
         return -1;
     }
@@ -164,7 +191,7 @@ static int reapDeadProcs_(void) {
 }
 
 static int tcpEpollInit_(Listener *listener) {
-    int epoll_fd = epoll_create1(0);
+    int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (epoll_fd == -1) {
         perror("epoll_create1");
         return -1;
@@ -190,7 +217,7 @@ static int addtoEpollList_(Conn *conn, Listener *listener) {
 
     Event *event = getEventPtr_(listener);
     event->ev.data.ptr = conn;
-    event->ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
+    event->ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
     if (epoll_ctl(event->epoll_fd, EPOLL_CTL_ADD, conn->fd, &event->ev) == -1) {
         perror("epoll_ctl client");
         return -1;
@@ -259,7 +286,7 @@ Listener *tcpListen(char *port) {
 
     listener->fd = fd;
 
-    if (listen(fd, SOMAXCONN) == -1) {
+    if (listen(fd, BACKLOG) == -1) {
         perror("listen");
         goto clean;
     }
@@ -301,6 +328,7 @@ Conn *tcpAccept(Listener *listener) {
     // FIX:
     // Not so performant as every time a new client connects it allocates memory
     // in the heap. So, if there are 100 clients it calls malloc a 100 times
+    /// TODO: Use a connection pool
     Conn *conn = (Conn *)malloc_(sizeof(Conn));
     if (!conn) {
         perror("malloc conn");
@@ -422,6 +450,10 @@ ssize_t tcpSend(int fd, const void *buf, size_t len) {
 }
 
 char *getIPAddr(struct sockaddr_storage *sa, char *buf, size_t len) {
+    if (!sa || !buf) {
+        return NULL;
+    }
+
     if (sa->ss_family == AF_INET) {
         struct sockaddr_in *s = (struct sockaddr_in *)sa;
         inet_ntop(AF_INET, &s->sin_addr, buf, len);
