@@ -10,7 +10,6 @@
 #ifndef STR_H
 #define STR_H
 
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,10 +28,16 @@ extern "C" {
 
 typedef char *String;
 
-/// constructors and destructors
+/// Constructors
 String strNew(const char *s);
-String strNewLen(const void *s, const uint32_t len);
+String strNewLen(const void *s, const size_t len);
 String strEmpty(void);
+
+/// String methods
+size_t strLen(const String s);
+int strCmp(const String s1, const String s2);
+
+/// Destructors
 void strFree(String s);
 
 #ifdef STRING_IMPLEMENTATION
@@ -40,8 +45,8 @@ void strFree(String s);
 // header for String type
 // used as a binary perfix that's stored before the actual String type
 typedef struct {
-    uint32_t len_;
-    uint32_t alloc_;
+    size_t len_;
+    size_t alloc_;
 } StrHdr_;
 
 // get pointer to header from String
@@ -50,19 +55,19 @@ static inline StrHdr_ *getStrHdr_(const String s) {
 }
 
 // get available memory space from String
-static inline uint32_t getStrAvail_(const String s) {
+static inline size_t getStrAvail_(const String s) {
     return (getStrHdr_(s)->alloc_ - getStrHdr_(s)->len_);
 }
 
-static inline uint32_t getStrLen_(const String s) {
+static inline size_t getStrLen_(const String s) {
     return (getStrHdr_(s)->len_);
 }
 
-static inline uint32_t getStrAlloc_(const String s) {
+static inline size_t getStrAlloc_(const String s) {
     return (getStrHdr_(s)->alloc_);
 }
 
-String strNewLen(const void *s, const uint32_t len) {
+String strNewLen(const void *s, const size_t len) {
     StrHdr_ *hdr = (StrHdr_ *)malloc_(sizeof(StrHdr_) + len + 1);
     if (!hdr) {
         return NULL;
@@ -90,6 +95,31 @@ String strNew(const char *s) {
     }
 
     return strNewLen(s, strlen(s));
+}
+
+size_t strLen(const String s) {
+    if (!s) {
+        return -1;
+    }
+
+    return getStrLen_(s);
+}
+
+int strCmp(const String s1, const String s2) {
+    if (!s1 || !s2) {
+        return -1;
+    }
+
+    size_t s1_len = getStrLen_(s1);
+    size_t s2_len = getStrLen_(s2);
+    size_t min_len = s1_len < s2_len ? s1_len : s2_len;
+
+    int cmp = memcmp(s1, s2, min_len);
+    if (cmp != 0) {
+        return cmp;
+    }
+
+    return (s1_len > s2_len) - (s1_len < s2_len);
 }
 
 void strFree(String s) {

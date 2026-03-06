@@ -32,8 +32,11 @@ $(objdir)/%.o: src/%.c | $(objdir)
 $(objdir):
 	mkdir -p $@
 
-test:
+test: $(exec)
 	@python3 ./test/test_tcp.py
+
+perf: $(exec)
+	@bash ./test/perf.sh
 
 clean:
 	rm -rf $(exec) $(objdir)
