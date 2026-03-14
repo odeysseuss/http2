@@ -96,13 +96,13 @@ Event *tcpPoll(Listener *listener);
 /// Returns:
 /// On success, returns a Conn instance. On error, returns NULL.
 Conn *tcpAccept(Listener *listener);
-/// Handler function for each clients.
+/// Handler function for each clients. Creates a client loop and returns 0 on EAGAIN/EWOULDBLOCK
 /// Returns:
 /// On success, returns a 0. On error, returns -1.
-int tcpHandler(Conn *conn, void (*handler)(Conn *conn));
+int tcpHandler(Conn *conn, int (*handler)(Conn *conn));
 /// Removes the client socket from epoll, closes the socket and frees Conn instance
 /// Warning:
-/// SHOULD be called inside the tcpHandler
+/// SHOULD NOT be called explicitly, maintained by tcpHandler
 void tcpCloseConn(Conn *conn);
 /// Closes both epoll_fd and listener socket and frees Listener instance
 void tcpCloseListener(Listener *listener);
@@ -110,16 +110,12 @@ void tcpCloseListener(Listener *listener);
 /// Receive a message from the socket. Calls `recv` syscall
 /// Returns:
 /// On success, returns the total bytes received.
-/// On error, returns 0 if `fd` gets closed,
-/// -2 if `recv` call returns `EAGAIN/EWOULDBLOCK`
-/// and -1 for general error
+/// On error, returns -1 or 0 if `fd` got closed
 ssize_t tcpRecv(int fd, void *buf, size_t len);
 /// Send a message on socket. Calls `send` in a loop to ensure all the data has been send
 /// Returns:
 /// On success, returns the total bytes send.
-/// On error, returns 0 if `fd` gets closed,
-/// -2 if `send` call returns `EAGAIN/EWOULDBLOCK`
-/// and -1 for general error
+/// On error, returns -1 or 0 if `fd` gets closed
 ssize_t tcpSend(int fd, const void *buf, size_t len);
 
 /// IP version agnostic `inet_ntop`
@@ -362,12 +358,21 @@ clean:
     return NULL;
 }
 
-int tcpHandler(Conn *conn, void (*handler)(Conn *conn)) {
+int tcpHandler(Conn *conn, int (*handler)(Conn *conn)) {
     if (!conn || !handler) {
         return -1;
     }
 
-    handler(conn);
+    while (1) {
+        if (handler(conn) == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            }
+            tcpCloseConn(conn);
+            return -1;
+        }
+    }
+
     return 0;
 }
 
@@ -404,7 +409,7 @@ ssize_t tcpRecv(int fd, void *buf, size_t len) {
     ssize_t bytes_recv = recv(fd, buf, len, 0);
     if (bytes_recv == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return -2;
+            return -1;
         }
         perror("recv");
         return -1;
@@ -429,7 +434,7 @@ ssize_t tcpSend(int fd, const void *buf, size_t len) {
             send(fd, (const char *)buf + total, bytes_left, MSG_NOSIGNAL);
         if (bytes_send == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                return -2;
+                return -1;
             }
             perror("send");
             return -1;
